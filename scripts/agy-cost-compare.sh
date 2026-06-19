@@ -40,10 +40,23 @@ done
 PROMPT="${*:-}"
 [ -n "$PROMPT" ] || { echo "usage: agy-cost-compare.sh [-t tier] [--yolo] \"task\"" >&2; exit 1; }
 
-CLAUDE_IN_PER_M="${CLAUDE_IN_PER_M:-5}"
-CLAUDE_OUT_PER_M="${CLAUDE_OUT_PER_M:-25}"
-GEMINI_IN_PER_M="${GEMINI_IN_PER_M:-0.30}"
-GEMINI_OUT_PER_M="${GEMINI_OUT_PER_M:-2.50}"
+# Default prices from prices.json (env vars still override); Gemini rate by tier.
+PRICES="$HERE/../prices.json"
+if [ -f "$PRICES" ] && command -v python3 >/dev/null 2>&1; then
+  eval "$(python3 - "$PRICES" "$TIER" 2>/dev/null <<'PY'
+import json,sys
+try:
+    d=json.load(open(sys.argv[1])); t=sys.argv[2]
+    g=d["gemini_pro"] if t=="pro" else d["gemini_flash"]; c=d["claude_opus"]
+    print(f'_CIN={c["in"]} _COUT={c["out"]} _GIN={g["in"]} _GOUT={g["out"]}')
+except Exception: pass
+PY
+)"
+fi
+CLAUDE_IN_PER_M="${CLAUDE_IN_PER_M:-${_CIN:-5}}"
+CLAUDE_OUT_PER_M="${CLAUDE_OUT_PER_M:-${_COUT:-25}}"
+GEMINI_IN_PER_M="${GEMINI_IN_PER_M:-${_GIN:-1.50}}"
+GEMINI_OUT_PER_M="${GEMINI_OUT_PER_M:-${_GOUT:-9.00}}"
 CPT="${CHARS_PER_TOKEN:-4}"
 case "$CPT" in ''|*[!0-9]*) CPT=4 ;; esac   # must be a positive integer (avoid awk div-by-zero)
 [ "$CPT" -gt 0 ] || CPT=4

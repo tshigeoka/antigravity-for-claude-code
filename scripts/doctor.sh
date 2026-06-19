@@ -26,6 +26,15 @@ if command -v agy >/dev/null 2>&1; then
   MODELS="$(agy models 2>/dev/null || true)"
   if [ -n "$MODELS" ]; then
     ok "agy authenticated — $(printf '%s' "$MODELS" | grep -c . ) models available"
+    # 2b. tier->model names still exist (agy renames models across versions)
+    for m in "Gemini 3.5 Flash (High)" "Gemini 3.5 Flash (Low)" "Gemini 3.1 Pro (High)"; do
+      if printf '%s' "$MODELS" | grep -qF "$m"; then
+        ok "tier model present: $m"
+      else
+        bad "tier model NOT in 'agy models': $m"
+        info "fix: update model_for_tier() in agy-delegate.sh to a current name (run \`agy models\`)"
+      fi
+    done
   else
     bad "agy could not list models (not authenticated, or no network)"
     info "fix: authenticate agy (run \`agy\` once interactively) and check GCP access"

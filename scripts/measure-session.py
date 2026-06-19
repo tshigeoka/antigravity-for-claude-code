@@ -11,6 +11,17 @@ are not exposed by `agy --print`, so the cheap-side cost must be priced separate
 """
 import json, os, sys, glob
 
+def load_prices():
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (os.path.join(here, "..", "prices.json"),
+              os.path.join(here, "prices.json"), "prices.json"):
+        try:
+            with open(p) as f:
+                return json.load(f)
+        except Exception:
+            continue
+    return None
+
 def resolve(arg):
     if os.path.isfile(arg):
         return arg
@@ -71,6 +82,15 @@ if __name__ == "__main__":
     print(f"  cache_create   {r['cache_create']:,}   <- 1.25x input (cache writes)")
     print(f"  cache_read     {r['cache_read']:,}   <- 0.1x input (the cheap re-read)")
     print(f"  TOTAL tokens   {r['total']:,}")
-    print(f"  COST-WEIGHTED  {weighted:,.0f}   <- the number that matters ($-proxy)")
+    print(f"  COST-WEIGHTED  {weighted:,.0f}   <- model-agnostic $-proxy (output 5x, etc.)")
+    pr = load_prices()
+    if pr and isinstance(pr.get(pr.get("orchestrator", "claude_opus")), dict):
+        deck = pr.get("orchestrator", "claude_opus")
+        m = pr[deck]; IN, OUT = m.get("in"), m.get("out")
+        cw = pr.get("cache_write_mult", 1.25); crd = pr.get("cache_read_mult", 0.10)
+        if IN and OUT:
+            usd = (r['output']*OUT + r['input']*IN +
+                   r['cache_create']*IN*cw + r['cache_read']*IN*crd) / 1e6
+            print(f"  est. USD       ${usd:,.4f}   ({deck} deck, prices.json — VERIFY)")
     print(f"  tool calls     {sum(r['tools'].values())}  {r['tools']}")
     print(f"  scope          main session loop only — subagent/workflow transcripts (separate files) NOT counted")
