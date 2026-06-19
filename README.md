@@ -8,6 +8,8 @@ Claude conducts the judgement; Gemini does the heavy lifting — intelligent mod
 [![CI](https://github.com/yuting0624/antigravity-for-claude-code/actions/workflows/ci.yml/badge.svg)](https://github.com/yuting0624/antigravity-for-claude-code/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-5A4FCF)
+[![Antigravity CLI](https://img.shields.io/badge/Antigravity%20CLI-agy-4285F4?logo=google&logoColor=white)](https://antigravity.google/docs/cli-using)
+[![Gemini](https://img.shields.io/badge/Gemini-executor-8E75B2?logo=googlegemini&logoColor=white)](https://antigravity.google/)
 
 </div>
 
@@ -15,18 +17,7 @@ Claude conducts the judgement; Gemini does the heavy lifting — intelligent mod
 
 ## ⚡ Quick look
 
-<!-- Generate the GIF:  brew install vhs && vhs docs/demo.tape   → writes docs/demo.gif, then uncomment: -->
-<!-- ![Antigravity for Claude Code demo](docs/demo.gif) -->
-> 📹 *Want the GIF? Run `vhs docs/demo.tape` (script included) → `docs/demo.gif`, then uncomment the image above.*
-
-```console
-❯ /antigravity:delegate --tier flash --dir . "Summarize every README under ./packages — 3 bullets each, with sources."
-
-⏺ Delegating the bulk reads to Antigravity (Gemini); keeping my own context lean.
-  $ agy-delegate.sh --tier flash --dir .  …            # runs agy headless
-⏺ agy returned a digest (12 READMEs → 36 bullets). Spot-checking 3 against the files… ✓ accurate.
-⏺ Done — here's the summary, and what I verified.
-```
+![Antigravity for Claude Code demo](docs/demo.gif)
 
 Claude stays the conductor; the bulk, token-heavy read ran on cheaper Gemini, and Claude verified the result.
 
