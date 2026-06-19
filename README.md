@@ -3,13 +3,13 @@
 # 🛰️ Antigravity for Claude Code
 
 **Run the Antigravity CLI (Gemini) as a collaborating sub-agent, right inside Claude Code.**
+![Antigravity for Claude Code](docs/image.png)
 Claude conducts the judgement; Gemini does the heavy lifting — intelligent model routing across the SDLC.
 
 [![CI](https://github.com/yuting0624/antigravity-for-claude-code/actions/workflows/ci.yml/badge.svg)](https://github.com/yuting0624/antigravity-for-claude-code/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-5A4FCF)
-[![Antigravity CLI](https://img.shields.io/badge/Antigravity%20CLI-agy-4285F4?logo=google&logoColor=white)](https://antigravity.google/docs/cli-using)
-[![Gemini](https://img.shields.io/badge/Gemini-executor-8E75B2?logo=googlegemini&logoColor=white)](https://antigravity.google/)
+![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-5A4FCF?logo=claudecode&logoColor=#D97757)
+[![Antigravity CLI](https://img.shields.io/badge/Antigravity%20CLI-agy-4285F4?logo=googlegemini&logoColor=white)](https://antigravity.google/docs/cli-using)
 
 </div>
 
