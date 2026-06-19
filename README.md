@@ -15,7 +15,9 @@ Claude conducts the judgement; Gemini does the heavy lifting — intelligent mod
 
 ## ⚡ Quick look
 
-> 📹 *30-second demo GIF coming soon — record `/antigravity:delegate` with [vhs](https://github.com/charmbracelet/vhs) and drop it at `docs/demo.gif`.*
+<!-- Generate the GIF:  brew install vhs && vhs docs/demo.tape   → writes docs/demo.gif, then uncomment: -->
+<!-- ![Antigravity for Claude Code demo](docs/demo.gif) -->
+> 📹 *Want the GIF? Run `vhs docs/demo.tape` (script included) → `docs/demo.gif`, then uncomment the image above.*
 
 ```console
 ❯ /antigravity:delegate --tier flash --dir . "Summarize every README under ./packages — 3 bullets each, with sources."
