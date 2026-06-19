@@ -14,13 +14,20 @@ import json, os, sys, glob
 def resolve(arg):
     if os.path.isfile(arg):
         return arg
-    hits = glob.glob(os.path.expanduser(f"~/.claude/projects/**/{arg}*.jsonl"), recursive=True)
+    base = os.path.expanduser("~/.claude/projects")
+    exact = glob.glob(f"{base}/**/{arg}.jsonl", recursive=True)
+    if exact:
+        return exact[0]
+    hits = sorted(glob.glob(f"{base}/**/{arg}*.jsonl", recursive=True))
+    if len(hits) > 1:
+        sys.stderr.write(f"warning: {len(hits)} files match '{arg}'; using {hits[0]}\n")
     return hits[0] if hits else None
 
 def measure(path):
     ti = to = tcc = tcr = turns = 0
     tools = {}
-    for line in open(path):
+    with open(path) as f:
+      for line in f:
         try:
             o = json.loads(line)
         except Exception:
@@ -66,3 +73,4 @@ if __name__ == "__main__":
     print(f"  TOTAL tokens   {r['total']:,}")
     print(f"  COST-WEIGHTED  {weighted:,.0f}   <- the number that matters ($-proxy)")
     print(f"  tool calls     {sum(r['tools'].values())}  {r['tools']}")
+    print(f"  scope          main session loop only — subagent/workflow transcripts (separate files) NOT counted")

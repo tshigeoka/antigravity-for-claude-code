@@ -45,8 +45,13 @@ CONTINUE=0
 CONV_ID=""
 
 die() { echo "agy-delegate: $*" >&2; exit 1; }
+# $1 = remaining argc ($#). Fail with a friendly message if an option has no value
+# (avoids `shift 2` aborting under `set -e` with a cryptic "shift count" error).
+need() { [ "$1" -ge 2 ] || die "option '$2' needs a value"; }
 
-usage() { sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+# Print the header comment between "# Usage:" and "# Exit codes:" (anchored to
+# content, not line numbers, so it never desyncs when the header changes).
+usage() { sed -n '/^# Usage:/,/^# Exit codes:/p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 
 # --- map a tier to an exact agy model name (see `agy models`) ---
 model_for_tier() {
@@ -60,19 +65,19 @@ model_for_tier() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    -t|--tier)    TIER="${2:-}"; shift 2 ;;
-    -d|--dir)     ADD_DIRS+=("${2:-}"); shift 2 ;;
-    --timeout)    TIMEOUT="${2:-}"; shift 2 ;;
-    --yolo)       YOLO=1; shift ;;
-    --sandbox)    SANDBOX=1; shift ;;
-    -c|--continue) CONTINUE=1; shift ;;          # resume most recent agy conversation
-    --conversation) CONV_ID="${2:-}"; shift 2 ;; # resume a specific conversation by ID
-    -m|--model)   MODEL="${2:-}"; shift 2 ;;
-    -h|--help)    usage ;;
-    -)            PROMPT="$(cat)"; shift ;;       # read prompt from stdin
-    --)           shift; PROMPT="${*:-}"; break ;;
-    -*)           die "unknown option '$1'" ;;
-    *)            PROMPT="$*"; break ;;            # rest is the prompt
+    -t|--tier)      need "$#" "$1"; TIER="$2"; shift 2 ;;
+    -d|--dir)       need "$#" "$1"; ADD_DIRS+=("$2"); shift 2 ;;
+    --timeout)      need "$#" "$1"; TIMEOUT="$2"; shift 2 ;;
+    --yolo)         YOLO=1; shift ;;
+    --sandbox)      SANDBOX=1; shift ;;
+    -c|--continue)  CONTINUE=1; shift ;;            # resume most recent agy conversation
+    --conversation) need "$#" "$1"; CONV_ID="$2"; shift 2 ;; # resume a specific conversation by ID
+    -m|--model)     need "$#" "$1"; MODEL="$2"; shift 2 ;;
+    -h|--help)      usage ;;
+    -)              PROMPT="$(cat)"; shift ;;       # read prompt from stdin
+    --)             shift; PROMPT="${*:-}"; break ;;
+    -*)             die "unknown option '$1'" ;;
+    *)              PROMPT="$*"; break ;;            # rest is the prompt
   esac
 done
 
@@ -92,14 +97,18 @@ for d in "${ADD_DIRS[@]:-}"; do [ -n "$d" ] && ARGS+=(--add-dir "$d"); done
 [ -n "$CONV_ID" ]      && ARGS+=(--conversation "$CONV_ID")
 
 # --- run (always detach stdin so non-TTY stdout is not dropped) ---
+# Per-invocation temp file for stderr (mktemp avoids the race + symlink risk of a
+# fixed /tmp path when multiple delegations run concurrently). Cleaned up on exit.
+ERR="$(mktemp "${TMPDIR:-/tmp}/agy-delegate.XXXXXX")"
+trap 'rm -f "$ERR"' EXIT
 set +e
-OUT="$(agy "${ARGS[@]}" -p "$PROMPT" < /dev/null 2>/tmp/agy-delegate.err)"
+OUT="$(agy "${ARGS[@]}" -p "$PROMPT" < /dev/null 2>"$ERR")"
 RC=$?
 set -e
 
 if [ $RC -ne 0 ]; then
   echo "agy-delegate: agy exited $RC" >&2
-  [ -s /tmp/agy-delegate.err ] && cat /tmp/agy-delegate.err >&2
+  [ -s "$ERR" ] && cat "$ERR" >&2
   exit 2
 fi
 if [ -z "${OUT//[$' \t\n\r']/}" ]; then

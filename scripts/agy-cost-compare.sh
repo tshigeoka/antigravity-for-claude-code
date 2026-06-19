@@ -27,19 +27,30 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TIER="flash"
 
-case "${1:-}" in -t|--tier) TIER="${2:-flash}"; shift 2 ;; esac
+YOLO=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -t|--tier) TIER="${2:-flash}"; shift 2 ;;
+    --yolo)    YOLO="--yolo"; shift ;;   # needed if the task uses tools (web/Vertex search)
+    --)        shift; break ;;
+    -*)        echo "unknown option: $1" >&2; exit 1 ;;
+    *)         break ;;
+  esac
+done
 PROMPT="${*:-}"
-[ -n "$PROMPT" ] || { echo "usage: agy-cost-compare.sh [-t tier] \"task\"" >&2; exit 1; }
+[ -n "$PROMPT" ] || { echo "usage: agy-cost-compare.sh [-t tier] [--yolo] \"task\"" >&2; exit 1; }
 
 CLAUDE_IN_PER_M="${CLAUDE_IN_PER_M:-5}"
 CLAUDE_OUT_PER_M="${CLAUDE_OUT_PER_M:-25}"
 GEMINI_IN_PER_M="${GEMINI_IN_PER_M:-0.30}"
 GEMINI_OUT_PER_M="${GEMINI_OUT_PER_M:-2.50}"
 CPT="${CHARS_PER_TOKEN:-4}"
+case "$CPT" in ''|*[!0-9]*) CPT=4 ;; esac   # must be a positive integer (avoid awk div-by-zero)
+[ "$CPT" -gt 0 ] || CPT=4
 
 echo ">> Delegating to agy (tier=$TIER) ..." >&2
 START=$(date +%s 2>/dev/null || echo 0)
-OUT="$("$HERE/agy-delegate.sh" --tier "$TIER" "$PROMPT")"
+OUT="$("$HERE/agy-delegate.sh" --tier "$TIER" ${YOLO:+$YOLO} "$PROMPT")"
 END=$(date +%s 2>/dev/null || echo 0)
 ELAPSED=$(( END - START ))
 

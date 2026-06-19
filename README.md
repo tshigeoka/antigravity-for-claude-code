@@ -43,10 +43,29 @@ rules in the skill for how to actually get the savings.
 
 ```
 antigravity/
-├── .claude-plugin/plugin.json     # plugin marker (name: antigravity)
+├── .claude-plugin/                # plugin + marketplace manifests
 ├── skills/antigravity/SKILL.md    # WHEN + HOW Claude collaborates with Antigravity
+├── commands/                      # slash commands: /antigravity:delegate|review|setup
 ├── scripts/agy-delegate.sh        # robust headless wrapper around `agy --print`
-└── scripts/agy-cost-compare.sh    # optional: estimate cost saved on a task
+├── scripts/agy-cost-compare.sh    # optional: estimate cost saved on a task
+├── scripts/measure-session.py     # COST-WEIGHTED token accounting for a session
+├── scripts/doctor.sh              # health check (agy installed + authenticated)
+├── tests/run-tests.sh             # dependency-free tests (stubs agy)
+└── docs/                          # AB-RESULTS (the measured A/B) + DEMO-KIT
+```
+
+## Slash commands
+
+| command | what it does |
+|---|---|
+| `/antigravity:setup` | health check — is `agy` installed + authenticated, scripts ready |
+| `/antigravity:delegate [--tier flash\|pro] <task>` | delegate a subtask to agy under cost discipline, then verify |
+| `/antigravity:review [--adversarial]` | independent cross-model review of the current diff; Claude reconciles |
+
+## Tests
+
+```bash
+bash tests/run-tests.sh   # no dependencies; stubs `agy` to check arg parsing, exit codes, accounting
 ```
 
 ## Prerequisites
