@@ -21,3 +21,10 @@ Do this:
 
 Remember the break-even: only delegate if the offloaded volume clearly exceeds the
 spec + round-trip + verification overhead. Tiny tasks are cheaper to just do yourself.
+
+**Long task, interactive session?** Start it in the background and keep working — keeps
+the prompt cache warm and frees you to do other turns:
+`ID=$("$CLAUDE_PLUGIN_ROOT/scripts/agy-job.sh" start --tier pro --dir . "<task>")`
+then check `/antigravity:status` and collect with `/antigravity:result <id>`.
+(Don't do this when YOU are headless `claude -p` — one-shot, no later turn to collect;
+delegate synchronously there.)

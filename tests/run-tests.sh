@@ -18,6 +18,7 @@ PASS=0; FAIL=0
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/agy" <<'STUB'
 #!/usr/bin/env bash
+[ -n "${STUB_SLEEP:-}" ] && sleep "$STUB_SLEEP"
 case "${STUB_MODE:-text}" in
   empty) exit 0 ;;                  # no stdout -> wrapper should exit 3
   fail)  echo "boom" >&2; exit 7 ;; # nonzero  -> wrapper should exit 2
@@ -81,6 +82,31 @@ check "measure: tool count" 0 "$rc" "'Bash': 1" "$out"
 
 out=$(python3 "$MEASURE" /no/such/file 2>/dev/null); rc=$?
 check "measure: missing file -> exit 1" 1 "$rc"
+
+echo "== agy-job.sh (background jobs) =="
+export ANTIGRAVITY_JOBS="$TMP/jobs"
+JOB="$ROOT/scripts/agy-job.sh"
+
+id=$(STUB_MODE=text STUB_SLEEP=1 "$JOB" start --tier flash "demo task" 2>/dev/null); rc=$?
+check "job start -> exit 0" 0 "$rc"
+[ -n "$id" ] && { echo "ok: job start returns id ($id)"; PASS=$((PASS+1)); } || { echo "FAIL: job start id empty"; FAIL=$((FAIL+1)); }
+
+out=$("$JOB" status "$id" 2>/dev/null); rc=$?
+check "job status shows running" 0 "$rc" "running" "$out"
+
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  printf '%s' "$("$JOB" status "$id" 2>/dev/null)" | grep -q "state=done" && break
+  sleep 0.5
+done
+out=$("$JOB" result "$id" 2>/dev/null); rc=$?
+check "job result -> output when done" 0 "$rc" "STUB_OK" "$out"
+
+cid=$(STUB_MODE=text STUB_SLEEP=10 "$JOB" start --tier flash "long task" 2>/dev/null)
+sleep 0.5; "$JOB" cancel "$cid" >/dev/null 2>&1; sleep 0.5
+out=$("$JOB" status "$cid" 2>/dev/null)
+if printf '%s' "$out" | grep -q "state=running"; then
+  echo "FAIL: job cancel (still running)"; FAIL=$((FAIL+1))
+else echo "ok: job cancel stops it"; PASS=$((PASS+1)); fi
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

@@ -47,6 +47,7 @@ antigravity/
 ├── skills/antigravity/SKILL.md    # WHEN + HOW Claude collaborates with Antigravity
 ├── commands/                      # slash commands: /antigravity:delegate|review|setup
 ├── scripts/agy-delegate.sh        # robust headless wrapper around `agy --print`
+├── scripts/agy-job.sh             # background-job layer (start/status/result/cancel)
 ├── scripts/agy-cost-compare.sh    # optional: estimate cost saved on a task
 ├── scripts/measure-session.py     # COST-WEIGHTED token accounting for a session
 ├── scripts/doctor.sh              # health check (agy installed + authenticated)
@@ -61,6 +62,13 @@ antigravity/
 | `/antigravity:setup` | health check — is `agy` installed + authenticated, scripts ready |
 | `/antigravity:delegate [--tier flash\|pro] <task>` | delegate a subtask to agy under cost discipline, then verify |
 | `/antigravity:review [--adversarial]` | independent cross-model review of the current diff; Claude reconciles |
+| `/antigravity:status [id]` | list background delegation jobs / show one |
+| `/antigravity:result <id>` | fetch a finished background job's output, then verify it |
+| `/antigravity:cancel <id>` | cancel a running background job |
+
+Background jobs (`scripts/agy-job.sh`) are for **interactive** sessions — fire a long
+delegation, keep working (cache stays warm), then collect. In headless `claude -p` (one
+shot) delegate **synchronously** instead; there's no later turn to collect a result.
 
 ## Tests
 
