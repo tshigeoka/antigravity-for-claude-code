@@ -71,6 +71,10 @@ In Claude Code:
 
 ## 🧩 Slash commands
 
+<img src="docs/command-menu.png" alt="The /antigravity commands in Claude Code's slash-command menu" width="640">
+
+*The plugin's commands show up natively in Claude Code's `/` menu.*
+
 | command | what it does |
 |---|---|
 | `/antigravity:setup` | health check — `agy` installed + authenticated, scripts ready |
