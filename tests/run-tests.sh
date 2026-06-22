@@ -104,6 +104,13 @@ check "explicit --tier bogus -> exit 1" 1 "$rc"
 out=$(PATH="/usr/bin:/bin" "$DELEGATE" "hi" 2>&1); rc=$?
 check "agy missing -> exit 13 + AGY_MISSING signal" 13 "$rc" "AGY_MISSING" "$out"
 
+# --print-command: dry run prints the resolved agy invocation and exits 0 (agy not run)
+out=$("$DELEGATE" --tier pro --print-command "hi" 2>/dev/null); rc=$?
+check "--print-command -> exit 0 + resolved flags" 0 "$rc" "--print-timeout 5m" "$out"
+check "--print-command shows the tier model" 0 "$rc" "Pro" "$out"
+out=$(PATH="/usr/bin:/bin" "$DELEGATE" --print-command "hi" 2>/dev/null); rc=$?
+check "--print-command works without agy on PATH" 0 "$rc" "--print-timeout" "$out"
+
 echo "== hooks =="
 HOOKS="$ROOT/hooks"
 
@@ -209,6 +216,57 @@ if printf '%s' "$out" | grep -q "rc=10: QUOTA"; then echo "ok: job renders rc=10
 else echo "FAIL: job did not render 'rc=10: QUOTA' label (got: $out)"; FAIL=$((FAIL+1)); fi
 if printf '%s' "$out" | grep -q "QUOTA_EXHAUSTED"; then echo "ok: job shows AGY_SIGNAL"; PASS=$((PASS+1));
 else echo "FAIL: job did not surface AGY_SIGNAL"; FAIL=$((FAIL+1)); fi
+
+echo "== plugin contract =="
+python3 - "$ROOT" <<'PY'
+import json, os, re, sys, glob
+root = sys.argv[1]
+def p(*a): return os.path.join(root, *a)
+errs = []
+def need(cond, msg):
+    if not cond: errs.append(msg)
+
+pj = json.load(open(p(".claude-plugin", "plugin.json")))
+need(pj.get("name") == "antigravity", "plugin.json name != antigravity")
+need(bool(pj.get("version")), "plugin.json missing version")
+
+mp = json.load(open(p(".claude-plugin", "marketplace.json")))
+plugins = mp.get("plugins", [])
+need(bool(plugins) and plugins[0].get("source") == "./", "marketplace plugins[0].source != ./")
+need(bool(plugins) and plugins[0].get("name") == pj.get("name"), "marketplace plugin name != plugin.json name")
+
+# every SessionStart hook command resolves to a real file
+hj = json.load(open(p("hooks", "hooks.json")))
+cmds = [h["command"] for grp in hj["hooks"].get("SessionStart", []) for h in grp["hooks"]]
+need(bool(cmds), "no SessionStart hook commands")
+for c in cmds:
+    m = re.search(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\"']+)", c)
+    need(bool(m), "hook command missing CLAUDE_PLUGIN_ROOT path: " + c)
+    if m: need(os.path.isfile(p(m.group(1))), "hook references missing file: " + m.group(1))
+
+# commands, skill, and agent all carry YAML frontmatter
+for f in glob.glob(p("commands", "*.md")) + [p("skills", "antigravity", "SKILL.md"), p("agents", "antigravity-delegate.md")]:
+    need(os.path.isfile(f), "missing file: " + f)
+    if os.path.isfile(f):
+        t = open(f).read()
+        need(t.startswith("---") and t.count("---") >= 2, "no YAML frontmatter: " + os.path.basename(f))
+
+# the delegate subagent's PreToolUse gate points at a real script
+agent = open(p("agents", "antigravity-delegate.md")).read()
+m = re.search(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\"']+\.sh)", agent)
+need(bool(m), "agent PreToolUse gate path not found")
+if m: need(os.path.isfile(p(m.group(1))), "agent gate references missing file: " + m.group(1))
+
+for s in ("hooks/check-agy.sh", "hooks/inject-policy.sh", "hooks/validate-delegate-bash.sh"):
+    need(os.access(p(s), os.X_OK), "not executable: " + s)
+
+if errs:
+    print("CONTRACT FAIL:")
+    for e in errs: print("  -", e)
+    sys.exit(1)
+PY
+rc=$?
+check "plugin contract (manifests, hook/agent refs, frontmatter, exec bits)" 0 "$rc"
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

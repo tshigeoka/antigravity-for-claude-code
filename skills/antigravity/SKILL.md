@@ -56,7 +56,8 @@ Routing tier within agy: `flash` (default, bulk) · `flash-lo` (cheapest, trivia
 ```
 Options: `--tier flash|flash-lo|pro` · `--dir <path>` (workspace, repeatable) ·
 `--timeout 10m` · `--yolo` (auto-approve tools — needed for any tool use in headless
-mode) · `--sandbox` · pipe a long prompt with a trailing `-`.
+mode) · `--sandbox` · `--print-command` (dry run: show the resolved `agy` call, don't run
+it) · pipe a long prompt with a trailing `-`.
 
 The wrapper handles agy's quirks (prompt is the value of `-p`; non-TTY stdout drop via
 `< /dev/null`; no `--output-format json`, so output is plain text you parse).

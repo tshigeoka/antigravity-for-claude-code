@@ -28,6 +28,7 @@
 #   -c, --continue                   Resume the most recent agy conversation (stateful)
 #       --conversation <id>          Resume a specific agy conversation by ID (stateful)
 #   -m, --model <exact name>         Override tier with an exact agy model name
+#       --print-command              Print the resolved agy command and exit (dry run)
 #   -h, --help                       Show this help
 #
 # Exit codes: 0 ok | 1 usage | 2 agy failed | 3 empty | 10 quota | 11 auth | 12 timeout | 13 agy missing
@@ -51,6 +52,7 @@ ADD_DIRS=()
 PROMPT=""
 CONTINUE=0
 CONV_ID=""
+PRINT_CMD=0
 
 die() { echo "agy-delegate: $*" >&2; exit 1; }
 # $1 = remaining argc ($#). Fail with a friendly message if an option has no value
@@ -92,6 +94,7 @@ while [ $# -gt 0 ]; do
     -c|--continue)  CONTINUE=1; shift ;;            # resume most recent agy conversation
     --conversation) need "$#" "$1"; CONV_ID="$2"; shift 2 ;; # resume a specific conversation by ID
     -m|--model)     need "$#" "$1"; MODEL="$2"; shift 2 ;;
+    --print-command) PRINT_CMD=1; shift ;;          # dry run: show the resolved agy command
     -h|--help)      usage ;;
     -)              PROMPT="$(cat)"; shift ;;       # read prompt from stdin
     --)             shift; PROMPT="${*:-}"; break ;;
@@ -101,7 +104,8 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$PROMPT" ] || die "no prompt given (pass a string, or '-' to read stdin)"
-if ! command -v agy >/dev/null 2>&1; then
+# --print-command is a dry run (introspection), so it doesn't require agy on PATH.
+if [ "$PRINT_CMD" -ne 1 ] && ! command -v agy >/dev/null 2>&1; then
   echo "agy-delegate: 'agy' not found on PATH — install the Antigravity CLI first" >&2
   signal AGY_MISSING "agy not on PATH"
   exit 13
@@ -127,6 +131,12 @@ for d in "${ADD_DIRS[@]:-}"; do [ -n "$d" ] && ARGS+=(--add-dir "$d"); done
 [ "$SANDBOX" -eq 1 ]   && ARGS+=(--sandbox)
 [ "$CONTINUE" -eq 1 ]  && ARGS+=(--continue)        # keep working context on the cheap (Gemini) side
 [ -n "$CONV_ID" ]      && ARGS+=(--conversation "$CONV_ID")
+
+# --- dry run: print the resolved (shell-quoted) agy invocation and exit ---
+if [ "$PRINT_CMD" -eq 1 ]; then
+  { printf 'agy'; printf ' %q' "${ARGS[@]}" -p "$PROMPT"; printf '\n'; }
+  exit 0
+fi
 
 # --- run (always detach stdin so non-TTY stdout is not dropped) ---
 # Per-invocation temp file for stderr (mktemp avoids the race + symlink risk of a

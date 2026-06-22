@@ -22,6 +22,11 @@ All notable changes to **Antigravity for Claude Code**. Format loosely follows
 - **`/antigravity:research`** command: surfaces the skill's Claude-orchestrated deep-research
   recipe — agy fans out grounded web search (compact digests), Claude verifies each
   load-bearing claim across ≥2 independent sources and synthesizes a cited report.
+- **`--print-command`** (agy-delegate dry run): prints the resolved `agy …` invocation
+  without executing — for debugging/trust; works even without agy installed.
+- **Plugin-contract test**: asserts the manifests, that every hook/agent file reference
+  resolves, command/skill/agent frontmatter is present, and hook scripts are executable —
+  catches a broken reference before release.
 - **CI**: shellcheck + JSON validation now also cover `hooks/`.
 
 ## 0.10.0
