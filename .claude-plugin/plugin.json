@@ -1,6 +1,6 @@
 {
   "name": "antigravity",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Run the Antigravity CLI (Gemini) as a collaborating AI inside Claude Code, with intelligent model routing across the SDLC. Claude conducts — requirements, architecture, the hard 20%, verification, review — and routes deterministic, high-volume work (scaffolding, tests, first-pass review, migrations, web/Vertex AI Search) to Antigravity. Hybrid agentic engineering; lower token cost as a financial lever.",
   "author": {
     "name": "linyuting"
@@ -17,5 +17,25 @@
     "model-routing",
     "vibe-coding",
     "deep-research"
-  ]
+  ],
+  "userConfig": {
+    "default_tier": {
+      "type": "string",
+      "title": "Default Antigravity tier",
+      "description": "Tier used by agy-delegate.sh when --tier is not passed. One of: flash (Gemini 3.5 Flash High, default — bulk work), flash-lo (Flash Low, cheapest/trivial), pro (Gemini 3.1 Pro High, harder reasoning).",
+      "default": "flash"
+    },
+    "timeout": {
+      "type": "string",
+      "title": "Default delegation timeout",
+      "description": "Default agy print-mode timeout when --timeout is not passed, e.g. 5m, 10m, 300s.",
+      "default": "5m"
+    },
+    "coding_policy": {
+      "type": "string",
+      "title": "Inject routing policy at session start",
+      "description": "When on, a SessionStart hook injects this plugin's cost-aware routing policy (delegate above the break-even, keep Claude's context lean, always verify agy's output) as session context, so the discipline applies without invoking the skill. Set to off/false/0/no to suppress.",
+      "default": "on"
+    }
+  }
 }

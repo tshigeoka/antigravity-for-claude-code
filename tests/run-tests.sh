@@ -20,10 +20,13 @@ cat > "$TMP/bin/agy" <<'STUB'
 #!/usr/bin/env bash
 [ -n "${STUB_SLEEP:-}" ] && sleep "$STUB_SLEEP"
 case "${STUB_MODE:-text}" in
-  empty) exit 0 ;;                  # no stdout -> wrapper should exit 3
-  fail)  echo "boom" >&2; exit 7 ;; # nonzero  -> wrapper should exit 2
-  args)  printf '%s\n' "$*" ;;      # echo args for assertions
-  *)     echo "STUB_OK" ;;
+  empty)   exit 0 ;;                  # no stdout -> wrapper should exit 3
+  fail)    echo "boom" >&2; exit 7 ;; # nonzero  -> wrapper should exit 2
+  args)    printf '%s\n' "$*" ;;      # echo args for assertions
+  quota)   echo "Error: quota exceeded for this model" >&2; exit 1 ;;     # -> wrapper exit 10
+  auth)    echo "Error: request is unauthenticated; please sign in" >&2; exit 1 ;; # -> exit 11
+  timeout) echo "Error: deadline exceeded (the request timed out)" >&2; exit 1 ;;  # -> exit 12
+  *)       echo "STUB_OK" ;;
 esac
 STUB
 chmod +x "$TMP/bin/agy"
@@ -66,6 +69,92 @@ check "pro tier -> correct model string" 0 "$rc" "Gemini 3.1 Pro (High)" "$out"
 out=$(printf 'piped prompt' | STUB_MODE=args "$DELEGATE" - 2>/dev/null); rc=$?
 check "stdin prompt (-) read" 0 "$rc" "-p" "$out"
 
+# structured exit codes + machine-readable signal (stderr merged into capture)
+out=$(STUB_MODE=quota "$DELEGATE" "hi" 2>&1); rc=$?
+check "agy quota -> exit 10 + signal" 10 "$rc" "QUOTA_EXHAUSTED" "$out"
+
+out=$(STUB_MODE=auth "$DELEGATE" "hi" 2>&1); rc=$?
+check "agy auth -> exit 11 + signal" 11 "$rc" "AUTH_REQUIRED" "$out"
+
+out=$(STUB_MODE=timeout "$DELEGATE" "hi" 2>&1); rc=$?
+check "agy timeout -> exit 12 + signal" 12 "$rc" "TIMEOUT" "$out"
+
+# userConfig default tier via env; explicit --tier still wins
+out=$(STUB_MODE=args CLAUDE_PLUGIN_OPTION_DEFAULT_TIER=pro "$DELEGATE" "hi" 2>/dev/null); rc=$?
+check "userConfig default_tier=pro -> Pro model" 0 "$rc" "Gemini 3.1 Pro (High)" "$out"
+
+out=$(STUB_MODE=args CLAUDE_PLUGIN_OPTION_DEFAULT_TIER=pro "$DELEGATE" --tier flash "hi" 2>/dev/null); rc=$?
+check "explicit --tier overrides userConfig" 0 "$rc" "Gemini 3.5 Flash (High)" "$out"
+
+# default + userConfig timeout, with explicit flag winning
+out=$(STUB_MODE=args "$DELEGATE" "hi" 2>/dev/null); rc=$?
+check "default timeout -> --print-timeout 5m" 0 "$rc" "--print-timeout 5m" "$out"
+out=$(STUB_MODE=args CLAUDE_PLUGIN_OPTION_TIMEOUT=9m "$DELEGATE" "hi" 2>/dev/null); rc=$?
+check "userConfig timeout=9m -> --print-timeout 9m" 0 "$rc" "--print-timeout 9m" "$out"
+out=$(STUB_MODE=args CLAUDE_PLUGIN_OPTION_TIMEOUT=9m "$DELEGATE" --timeout 3m "hi" 2>/dev/null); rc=$?
+check "explicit --timeout overrides userConfig" 0 "$rc" "--print-timeout 3m" "$out"
+
+# invalid default tier from config falls back to flash; explicit --tier typo still errors
+out=$(STUB_MODE=args CLAUDE_PLUGIN_OPTION_DEFAULT_TIER=bogus "$DELEGATE" "hi" 2>/dev/null); rc=$?
+check "invalid userConfig tier -> falls back to flash" 0 "$rc" "Gemini 3.5 Flash (High)" "$out"
+out=$("$DELEGATE" --tier bogus "hi" 2>/dev/null); rc=$?
+check "explicit --tier bogus -> exit 1" 1 "$rc"
+
+# agy missing on PATH -> exit 13 + AGY_MISSING signal (PATH without the stub or real agy)
+out=$(PATH="/usr/bin:/bin" "$DELEGATE" "hi" 2>&1); rc=$?
+check "agy missing -> exit 13 + AGY_MISSING signal" 13 "$rc" "AGY_MISSING" "$out"
+
+echo "== hooks =="
+HOOKS="$ROOT/hooks"
+
+python3 -c "import json; json.load(open('$HOOKS/policy-context.json'))" 2>/dev/null; rc=$?
+check "policy-context.json is valid JSON" 0 "$rc"
+
+out=$("$HOOKS/inject-policy.sh" 2>/dev/null); rc=$?
+check "inject-policy default on -> emits additionalContext" 0 "$rc" "additionalContext" "$out"
+check "inject-policy is cost-aware (not 'delegate everything')" 0 "$rc" "COST-AWARE" "$out"
+# the emitted stdout is a well-formed SessionStart hook payload (not just substrings)
+printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["hookSpecificOutput"]["hookEventName"]=="SessionStart"' 2>/dev/null; rc=$?
+check "inject-policy emits valid SessionStart JSON" 0 "$rc"
+
+out=$(CLAUDE_PLUGIN_OPTION_CODING_POLICY=off "$HOOKS/inject-policy.sh" 2>/dev/null); rc=$?
+if [ "$rc" = 0 ] && [ -z "$out" ]; then echo "ok: inject-policy off -> exit 0 + no output"; PASS=$((PASS+1));
+else echo "FAIL: inject-policy off (rc=$rc, out='${out:0:40}')"; FAIL=$((FAIL+1)); fi
+
+# check-agy: exits 0 whether agy is present (stub) or absent, and warns when absent
+out=$("$HOOKS/check-agy.sh" 2>/dev/null); rc=$?
+check "check-agy (agy present) -> exit 0" 0 "$rc"
+err=$( { PATH="/usr/bin:/bin" "$HOOKS/check-agy.sh" >/dev/null; } 2>&1 ); rc=$?
+check "check-agy (agy absent) -> exit 0 + warns" 0 "$rc" "not on PATH" "$err"
+
+# hooks.json structural shape (SessionStart command hooks referencing the plugin root)
+python3 - "$HOOKS/hooks.json" <<'PY' 2>/dev/null; rc=$?
+import json,sys
+ss=json.load(open(sys.argv[1]))["hooks"]["SessionStart"]
+assert isinstance(ss,list) and ss
+for g in ss:
+    for h in g["hooks"]:
+        assert h["type"]=="command" and "CLAUDE_PLUGIN_ROOT" in h["command"]
+PY
+check "hooks.json SessionStart shape valid" 0 "$rc"
+
+echo "== delegate subagent guardrail =="
+GATE="$HOOKS/validate-delegate-bash.sh"
+printf '%s' '{"tool_input":{"command":"X/scripts/agy-delegate.sh --tier flash \"x\""}}' | "$GATE" >/dev/null 2>&1; rc=$?
+check "gate allows the delegate wrapper -> exit 0" 0 "$rc"
+printf '%s' '{"tool_input":{"command":"agy-job.sh start --tier pro \"b\""}}' | "$GATE" >/dev/null 2>&1; rc=$?
+check "gate allows the job wrapper -> exit 0" 0 "$rc"
+printf '%s' '{"tool_input":{"command":"rm -rf /tmp/x ; cat > f.txt"}}' | "$GATE" >/dev/null 2>&1; rc=$?
+check "gate blocks arbitrary bash -> exit 2" 2 "$rc"
+
+AGENT="$ROOT/agents/antigravity-delegate.md"
+tl=$(grep -m1 '^tools:' "$AGENT")
+if [ "$tl" = "tools: Bash, Read, Glob" ]; then echo "ok: delegate agent tools allowlist exact (no Write/Edit)"; PASS=$((PASS+1));
+else echo "FAIL: delegate agent tools line unexpected: '$tl'"; FAIL=$((FAIL+1)); fi
+if grep -q "PreToolUse" "$AGENT" && grep -q "validate-delegate-bash.sh" "$AGENT"; then
+  echo "ok: delegate agent wires the PreToolUse Bash gate"; PASS=$((PASS+1));
+else echo "FAIL: delegate agent missing PreToolUse gate"; FAIL=$((FAIL+1)); fi
+
 echo "== measure-session.py =="
 SESS="$TMP/sess.jsonl"
 cat > "$SESS" <<'JSONL'
@@ -107,6 +196,19 @@ out=$("$JOB" status "$cid" 2>/dev/null)
 if printf '%s' "$out" | grep -q "state=running"; then
   echo "FAIL: job cancel (still running)"; FAIL=$((FAIL+1))
 else echo "ok: job cancel stops it"; PASS=$((PASS+1)); fi
+
+# structured exit code surfaces through the job layer (quota -> rc 10 + label + signal)
+qid=$(STUB_MODE=quota "$JOB" start --tier flash "quota task" 2>/dev/null)
+for _ in 1 2 3 4 5 6 7 8; do
+  "$JOB" status "$qid" 2>/dev/null | grep -q "rc=10" && break
+  sleep 0.5
+done
+out=$("$JOB" status "$qid" 2>/dev/null)
+# require the rendered rc LABEL (guards the rc-from-file fix), not just the signal line
+if printf '%s' "$out" | grep -q "rc=10: QUOTA"; then echo "ok: job renders rc=10 label"; PASS=$((PASS+1));
+else echo "FAIL: job did not render 'rc=10: QUOTA' label (got: $out)"; FAIL=$((FAIL+1)); fi
+if printf '%s' "$out" | grep -q "QUOTA_EXHAUSTED"; then echo "ok: job shows AGY_SIGNAL"; PASS=$((PASS+1));
+else echo "FAIL: job did not surface AGY_SIGNAL"; FAIL=$((FAIL+1)); fi
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

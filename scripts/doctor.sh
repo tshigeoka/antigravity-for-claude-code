@@ -59,6 +59,13 @@ for s in agy-delegate.sh agy-cost-compare.sh; do
   fi
 done
 
+# 4b. SessionStart hooks executable
+for h in check-agy.sh inject-policy.sh validate-delegate-bash.sh; do
+  if [ -x "$ROOT/hooks/$h" ]; then ok "hooks/$h executable"; else
+    bad "hooks/$h not executable"; info "fix: chmod +x \"$ROOT/hooks/$h\""
+  fi
+done
+
 # 5. plugin version
 PJ="$ROOT/.claude-plugin/plugin.json"
 [ -f "$PJ" ] && ok "plugin: $(sed -n 's/.*"version"[: ]*"\([^"]*\)".*/v\1/p' "$PJ" | head -1)"

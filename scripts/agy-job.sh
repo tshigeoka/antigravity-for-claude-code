@@ -31,17 +31,32 @@ jobdir() {
   echo "$hits"
 }
 
-# running | done | failed (echoes word; sets RC global for done/failed)
+# echoes running | done | failed. (rc is read directly from the file by callers —
+# a global set here would NOT survive the `$(job_state ...)` command-substitution subshell.)
 job_state() {
-  local jd="$1"
+  local jd="$1" rc
   if [ -f "$jd/rc" ]; then
-    RC="$(cat "$jd/rc")"
-    [ "$RC" = "0" ] && echo done || echo failed
+    rc="$(cat "$jd/rc")"
+    if [ "$rc" = "0" ]; then echo "done"; else echo "failed"; fi
   elif [ -f "$jd/pid" ] && kill -0 "$(cat "$jd/pid")" 2>/dev/null; then
     echo running
   else
     echo failed   # pid gone, no rc recorded = crashed/killed
   fi
+}
+
+# Human label for a delegate exit code (mirrors agy-delegate.sh structured codes).
+rc_label() {
+  case "$1" in
+    0)  echo 'ok' ;;
+    2)  echo 'agy failed' ;;
+    3)  echo 'empty output' ;;
+    10) echo 'QUOTA — retry later with --continue' ;;
+    11) echo 'AUTH required — run `agy` once interactively' ;;
+    12) echo 'TIMEOUT — raise --timeout or narrow scope' ;;
+    13) echo 'agy MISSING — install the Antigravity CLI' ;;
+    *)  echo 'error' ;;
+  esac
 }
 
 cmd="${1:-}"; shift || true
@@ -74,16 +89,20 @@ case "$cmd" in
     ;;
   status)
     jd="$(jobdir "${1:-}")"; st="$(job_state "$jd")"
+    rc="$(cat "$jd/rc" 2>/dev/null || true)"
     echo "job:    $(basename "$jd")"
     sed 's/^/  /' "$jd/meta" 2>/dev/null
-    echo "  state=$st${RC:+ (rc=$RC)}"
+    if [ -n "$rc" ]; then echo "  state=$st (rc=$rc: $(rc_label "$rc"))"; else echo "  state=$st"; fi
+    sig="$(grep -m1 '^AGY_SIGNAL ' "$jd/err" 2>/dev/null || true)"
+    if [ -n "$sig" ]; then echo "  signal=${sig#AGY_SIGNAL }"; fi
     ;;
   result)
     jd="$(jobdir "${1:-}")"; st="$(job_state "$jd")"
     if [ "$st" = "running" ]; then echo "still running — try again later"; exit 2; fi
+    rc="$(cat "$jd/rc" 2>/dev/null || true)"
     [ -s "$jd/err" ] && { echo "----- stderr -----" >&2; cat "$jd/err" >&2; }
     cat "$jd/out" 2>/dev/null
-    echo "[exit rc=${RC:-?}]" >&2
+    echo "[exit rc=${rc:-?}${rc:+: $(rc_label "$rc")}]" >&2
     ;;
   cancel)
     jd="$(jobdir "${1:-}")"

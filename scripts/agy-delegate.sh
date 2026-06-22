@@ -30,12 +30,20 @@
 #   -m, --model <exact name>         Override tier with an exact agy model name
 #   -h, --help                       Show this help
 #
-# Exit codes: 0 ok | 1 usage error | 2 agy failed | 3 empty output
+# Exit codes: 0 ok | 1 usage | 2 agy failed | 3 empty | 10 quota | 11 auth | 12 timeout | 13 agy missing
+#
+# On a classifiable failure, a machine-readable line is printed to stderr so
+# orchestrators (e.g. agy-job.sh) can react without scraping prose:
+#   AGY_SIGNAL {"status":"QUOTA_EXHAUSTED","reason":"...","model":"...","retry":"--continue"}
+#
+# Defaults can be set via plugin userConfig (env): CLAUDE_PLUGIN_OPTION_DEFAULT_TIER,
+# CLAUDE_PLUGIN_OPTION_TIMEOUT. Explicit --tier/--timeout always override.
 #
 set -euo pipefail
 
-TIER="flash"
-TIMEOUT="5m"
+TIER="${CLAUDE_PLUGIN_OPTION_DEFAULT_TIER:-flash}"
+TIMEOUT="${CLAUDE_PLUGIN_OPTION_TIMEOUT:-5m}"
+TIER_EXPLICIT=0
 MODEL=""
 YOLO=0
 SANDBOX=0
@@ -48,6 +56,17 @@ die() { echo "agy-delegate: $*" >&2; exit 1; }
 # $1 = remaining argc ($#). Fail with a friendly message if an option has no value
 # (avoids `shift 2` aborting under `set -e` with a cryptic "shift count" error).
 need() { [ "$1" -ge 2 ] || die "option '$2' needs a value"; }
+
+# Emit a one-line machine-readable failure signal to stderr. $1=status $2=reason.
+# QUOTA failures advertise `--continue` so a caller knows how to resume the session.
+signal() {
+  local status="$1" reason="$2" retry=""
+  [ "$status" = "QUOTA_EXHAUSTED" ] && retry="--continue"
+  # sanitize reason so the JSON stays single-line and valid (no quotes/backslashes/newlines)
+  reason="$(printf '%s' "$reason" | tr '\n\r\t' '   ' | tr -d '"\\' | cut -c1-200)"
+  printf 'AGY_SIGNAL {"status":"%s","reason":"%s","model":"%s","retry":"%s"}\n' \
+    "$status" "$reason" "${MODEL:-}" "$retry" >&2
+}
 
 # Print the header comment between "# Usage:" and "# Exit codes:" (anchored to
 # content, not line numbers, so it never desyncs when the header changes).
@@ -65,7 +84,7 @@ model_for_tier() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    -t|--tier)      need "$#" "$1"; TIER="$2"; shift 2 ;;
+    -t|--tier)      need "$#" "$1"; TIER="$2"; TIER_EXPLICIT=1; shift 2 ;;
     -d|--dir)       need "$#" "$1"; ADD_DIRS+=("$2"); shift 2 ;;
     --timeout)      need "$#" "$1"; TIMEOUT="$2"; shift 2 ;;
     --yolo)         YOLO=1; shift ;;
@@ -82,7 +101,20 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$PROMPT" ] || die "no prompt given (pass a string, or '-' to read stdin)"
-command -v agy >/dev/null 2>&1 || die "'agy' not found on PATH — install the Antigravity CLI first"
+if ! command -v agy >/dev/null 2>&1; then
+  echo "agy-delegate: 'agy' not found on PATH — install the Antigravity CLI first" >&2
+  signal AGY_MISSING "agy not on PATH"
+  exit 13
+fi
+
+# A bad default tier from userConfig (env) shouldn't make every call die — fall back to
+# flash with a warning. An explicit --tier typo still errors (treated as user intent).
+if [ "$TIER_EXPLICIT" -eq 0 ]; then
+  case "$TIER" in
+    flash|flash-lo|pro) ;;
+    *) echo "agy-delegate: invalid default tier '$TIER' (set CLAUDE_PLUGIN_OPTION_DEFAULT_TIER to flash|flash-lo|pro); using flash" >&2; TIER="flash" ;;
+  esac
+fi
 
 [ -n "$MODEL" ] || MODEL="$(model_for_tier "$TIER")"
 
@@ -109,6 +141,22 @@ set -e
 if [ $RC -ne 0 ]; then
   echo "agy-delegate: agy exited $RC" >&2
   [ -s "$ERR" ] && cat "$ERR" >&2
+  # Best-effort classification into a structured code (the generic 2 is the safe
+  # fallback). Scans agy's STDERR only — its diagnostics go there; model-generated
+  # stdout could contain trigger words and misclassify. Patterns are deliberately
+  # specific to avoid false positives on incidental substrings.
+  blob="$(cat "$ERR" 2>/dev/null)"
+  shopt -s nocasematch
+  case "$blob" in
+    *quota*|*"rate limit"*|*"resource exhausted"*)
+      shopt -u nocasematch; signal QUOTA_EXHAUSTED "agy quota / rate limit"; exit 10 ;;
+    *unauthenticated*|*unauthorized*|*"sign in"*|*"please authenticate"*|*reauth*)
+      shopt -u nocasematch; signal AUTH_REQUIRED "agy not authenticated — run \`agy\` once"; exit 11 ;;
+    *"timed out"*|*"deadline exceeded"*|*"print-timeout"*)
+      shopt -u nocasematch; signal TIMEOUT "agy print-timeout / deadline exceeded"; exit 12 ;;
+  esac
+  shopt -u nocasematch
+  signal AGY_FAILED "agy exited $RC"
   exit 2
 fi
 if [ -z "${OUT//[$' \t\n\r']/}" ]; then

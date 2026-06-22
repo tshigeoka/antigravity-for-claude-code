@@ -3,6 +3,27 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.11.0
+- **Auto-injected routing policy** (`hooks/`): a `SessionStart` hook injects the
+  plugin's **cost-aware** routing policy as session context (delegate above the
+  break-even, keep Claude's context lean, always verify) so the discipline applies
+  without invoking the skill. Toggle via the `coding_policy` plugin option. A second
+  hook does a fast `agy` presence/auth check on session start.
+- **Delegation subagent** (`agents/antigravity-delegate.md`): `tools: Bash, Read, Glob`
+  with a `PreToolUse` gate (`hooks/validate-delegate-bash.sh`) that permits only the
+  delegation wrapper — no `Write`/`Edit`, no arbitrary Bash — so file *writing* runs on
+  agy/Gemini (no Claude tokens spent generating file contents); it returns a digest for
+  Claude to verify.
+- **Structured exit codes + signal**: `agy-delegate.sh` now classifies failures into
+  `10` quota · `11` auth · `12` timeout · `13` agy-missing and prints a machine-readable
+  `AGY_SIGNAL {...}` line; `agy-job.sh` surfaces the code/label/signal in `status`/`result`.
+- **Plugin options** (`userConfig`): `default_tier`, `timeout`, `coding_policy` — read by
+  the wrapper/hook via `CLAUDE_PLUGIN_OPTION_*` (explicit flags still override).
+- **`/antigravity:research`** command: surfaces the skill's Claude-orchestrated deep-research
+  recipe — agy fans out grounded web search (compact digests), Claude verifies each
+  load-bearing claim across ≥2 independent sources and synthesizes a cited report.
+- **CI**: shellcheck + JSON validation now also cover `hooks/`.
+
 ## 0.10.0
 - **Pricing config** (`prices.json`): single source of current Vertex rates (Opus 4.8
   5/25, Sonnet 4.6 3/15, Gemini 3.5 Flash 1.50/9, Gemini 3.1 Pro 2/12). `measure-session.py`

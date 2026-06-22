@@ -44,6 +44,9 @@ you → Claude Code (conduct: design / verify / review)
 - **Cross-model verification** — an independent, different-model opinion on your code.
 - **Background jobs** — fire a long delegation, keep working, collect later.
 - **Built-in cost discipline** — measured, not guessed (see below).
+- **Drops in with the discipline on** — a `SessionStart` hook injects the *cost-aware*
+  routing policy automatically (toggle in plugin settings), and the `antigravity-delegate`
+  subagent does file **writing** on Gemini, so Claude spends **no tokens generating file contents**.
 
 ## 📊 Measured results
 
@@ -80,6 +83,7 @@ In Claude Code:
 | `/antigravity:setup` | health check — `agy` installed + authenticated, scripts ready |
 | `/antigravity:delegate [--tier flash\|pro] <task>` | delegate a subtask to agy under cost discipline, then verify |
 | `/antigravity:review [--adversarial]` | independent cross-model review of the current diff; Claude reconciles |
+| `/antigravity:research <topic>` | Claude-orchestrated deep research — agy does grounded web legwork, Claude verifies citations across ≥2 sources |
 | `/antigravity:status [id]` · `:result <id>` · `:cancel <id>` | manage background delegation jobs |
 
 > Background jobs are for **interactive** sessions (fire-and-collect). In headless `claude -p` (one-shot), delegate **synchronously** — there's no later turn to collect a result.
@@ -148,9 +152,11 @@ Delegation doesn't save money by itself — these do (also in the skill):
 <summary><b>📦 What's inside · local dev · tests</b></summary>
 
 ```
-.claude-plugin/   plugin + marketplace manifests
+.claude-plugin/   plugin (+ userConfig: default_tier, timeout, coding_policy) + marketplace manifests
 skills/antigravity/SKILL.md   WHEN + HOW Claude collaborates with agy
-commands/         slash commands (delegate, review, setup, status, result, cancel)
+agents/           antigravity-delegate subagent (file work runs on Gemini, not Claude)
+commands/         slash commands (delegate, review, research, setup, status, result, cancel)
+hooks/            SessionStart: agy health check + auto-inject the cost-aware policy
 scripts/          agy-delegate · agy-job · agy-cost-compare · measure-session · doctor
 docs/             AB-RESULTS (measured A/B) · DEMO-KIT
 prices.json       Vertex rate config (verify before quoting)
