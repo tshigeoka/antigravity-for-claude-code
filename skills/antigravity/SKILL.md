@@ -1,7 +1,7 @@
 ---
 name: antigravity
 description: Run the Antigravity CLI (Gemini) as a collaborating AI inside Claude Code, with intelligent model routing across the software development lifecycle. Claude is the conductor/orchestrator — requirements, architecture, the hard 20%, verification, and review — and routes deterministic, high-volume work (scaffolding, boilerplate, test generation, first-pass review, migrations, web/Vertex AI Search) to Antigravity (Gemini), the cheaper, faster model. Use when the user wants to "use Antigravity / agy", "vibe code / agentic engineering", "accelerate the SDLC", "delegate to Gemini", "scaffold / generate tests / migrate", "first-pass code review", "search web or internal/company data", "deep research / multi-source research report", "second-model cross-check", or "lower token cost on a big job". Claude always verifies Antigravity's output and re-checks itself if unsatisfied.
-version: 0.15.1
+version: 0.16.0
 ---
 
 # Antigravity for Claude Code — hybrid SDLC
@@ -62,8 +62,11 @@ agy-delegate [options] "the task prompt"
 ```
 Options: `--tier flash|flash-lo|pro` · `--dir <path>` (workspace, repeatable) ·
 `--timeout 10m` · `--yolo` (auto-approve tools — needed for any tool use in headless
-mode) · `--sandbox` · `--print-command` (dry run: show the resolved `agy` call, don't run
-it) · pipe a long prompt with a trailing `-`.
+mode) · `--sandbox` · `--digest` (append a digest-only output contract — use it for any
+bulk read/analysis; the wrapper also warns on stderr when a reply comes back dump-sized,
+because ingesting digests instead of dumps is the single biggest cost lever) ·
+`--print-command` (dry run: show the resolved `agy` call, don't run it) · pipe a long
+prompt with a trailing `-`.
 
 The wrapper handles agy's quirks (prompt is the value of `-p`; non-TTY stdout drop via
 `< /dev/null`; no `--output-format json`, so output is plain text you parse).
@@ -111,7 +114,11 @@ Claude owns correctness. For anything that ships:
    final text. The per-conversation logs under `~/.gemini/antigravity-cli/conversations`
    are **SQLite `.db` files with opaque blob columns, not human-readable** — don't rely
    on reading them. Instead, have agy **summarize its own steps** as part of its output,
-   or keep a session with `--continue`/`--conversation` and ask it to recap.)
+   or keep a session with `--continue`/`--conversation` and ask it to recap.
+   **Exception — internal fan-out:** each spawned subagent leaves a READABLE
+   step-by-step `transcript.jsonl` under `~/.gemini/antigravity-cli/brain/<conversationId>/`;
+   audit it with `agy-trace <conversationId>` (or `agy-trace --list`). See the
+   Internal fan-out recipe below.)
 4. **Review every shipping line** — be skeptical of clever code; check imports are real
    packages (hallucinated deps), error handling, edge cases, and that the contract
    itself is internally consistent (examples/placeholders match the verified behavior).
@@ -213,6 +220,43 @@ ROOT=agy-delegate
 "$ROOT" --tier pro --yolo "List Vertex AI Search engines (list_engines)."
 "$ROOT" --tier pro --yolo "Search engine <ENGINE_ID> for: <question>. Cite the hits."
 ```
+
+## Internal fan-out recipe (agy spawns its own subagents)
+
+agy has a built-in `invoke_subagent` tool, but its sandbox only allows the pre-approved
+TypeNames **`self`** and **`research`** — a custom TypeName is rejected with
+`CORTEX_STEP_TYPE_INVOKE_SUBAGENT: ... not found or not allowed to be invoked`, even if
+it appears in `/agents` (upstream issue antigravity-cli#105). The working pattern
+(**verified headless on agy 1.0.12**) is **role delegation**: invoke TypeName `self` and
+inject the specialty via `Role` + `Prompt`.
+
+Use it for **orchestrator-mode work pushed down a level**: instead of Claude dispatching
+N parallel `agy-job` runs (N round-trips, coordination spend on the frontier side), send
+ONE delegation and let agy fan out internally — the coordination tokens land on the
+cheap side, and you ingest a single digest.
+
+```bash
+agy-delegate --dir . --digest --timeout 10m \
+  "Decompose <task> into up to 3 units. For each unit, invoke a background subagent
+   with TypeName \"self\" and a specialist Role (e.g. 'Test Writer'), each following
+   AGENTS.md. Wait for all of them, then report per-unit results, each subagent's
+   conversationId, and end with a DIGEST line."
+```
+
+Verified behaviors (agy 1.0.12):
+- **Spawning needs no `--yolo`** — subagent invocation isn't permission-gated; file
+  writes / web tools *inside* the subagents' work still need it.
+- Each spawn's tool result includes a `logAbsoluteUri` → a **readable step-by-step
+  `transcript.jsonl`** under `~/.gemini/antigravity-cli/brain/<conversationId>/` —
+  *better* trajectory visibility than a plain delegation. Have the parent report each
+  `conversationId`, then audit with `agy-trace <id>` (`agy-trace --list` finds recent ones).
+- Spawns are real and observable (new conversation threads appear) — but still run the
+  verification gates on the merged result; more autonomy = more surface for error.
+
+Caveats: `self`+Role is a **workaround around the sandbox allowlist**, not a documented
+contract — re-verify after agy upgrades. Bound the fan-out width in the prompt (agy
+chooses parallelism otherwise). A wide fan-out takes longer wall-clock — raise
+`--timeout`, and in an interactive session prefer a background job (`agy-job`).
 
 ## Deep-research recipe (multi-source)
 

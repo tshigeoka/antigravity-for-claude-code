@@ -26,6 +26,7 @@ case "${STUB_MODE:-text}" in
   quota)   echo "Error: quota exceeded for this model" >&2; exit 1 ;;     # -> wrapper exit 10
   auth)    echo "Error: request is unauthenticated; please sign in" >&2; exit 1 ;; # -> exit 11
   timeout) echo "Error: deadline exceeded (the request timed out)" >&2; exit 1 ;;  # -> exit 12
+  big)     printf 'x%.0s' $(seq 1 20000); echo ;;    # dump-sized reply -> digest guard warns
   *)       echo "STUB_OK" ;;
 esac
 STUB
@@ -170,6 +171,24 @@ out=$(STUB_MODE=args "$DELEGATE" "summarize the changelog in 3 bullets" 2>&1); r
 if printf '%s' "$out" | grep -q "DESCRIBES"; then echo "FAIL: warned for a non-write prompt"; FAIL=$((FAIL+1));
 else echo "ok: no write-warning for a read/summary prompt"; PASS=$((PASS+1)); fi
 
+# --digest appends the digest-only output contract to the prompt (issue #5)
+out=$(STUB_MODE=args "$DELEGATE" --digest "hi" 2>/dev/null); rc=$?
+check "--digest appends the output contract" 0 "$rc" "OUTPUT CONTRACT (digest)" "$out"
+out=$("$DELEGATE" --help); rc=$?
+check "usage documents --digest" 0 "$rc" "--digest" "$out"
+
+# digest-size guard: dump-sized reply -> stderr note; small reply -> silent; 0 disables
+out=$(STUB_MODE=big "$DELEGATE" "hi" 2>&1 >/dev/null); rc=$?
+check "dump-sized output -> raw-dump note on stderr" 0 "$rc" "raw dump" "$out"
+out=$(STUB_MODE=text "$DELEGATE" "hi" 2>&1 >/dev/null)
+if printf '%s' "$out" | grep -q "raw dump"; then echo "FAIL: digest guard fired on a small reply"; FAIL=$((FAIL+1));
+else echo "ok: digest guard silent on a small reply"; PASS=$((PASS+1)); fi
+out=$(STUB_MODE=big CLAUDE_PLUGIN_OPTION_DIGEST_WARN_CHARS=0 "$DELEGATE" "hi" 2>&1 >/dev/null)
+if printf '%s' "$out" | grep -q "raw dump"; then echo "FAIL: digest guard fired with digest_warn_chars=0"; FAIL=$((FAIL+1));
+else echo "ok: digest_warn_chars=0 disables the guard"; PASS=$((PASS+1)); fi
+out=$(STUB_MODE=text CLAUDE_PLUGIN_OPTION_DIGEST_WARN_CHARS=5 "$DELEGATE" "hi" 2>&1 >/dev/null); rc=$?
+check "custom digest_warn_chars threshold respected" 0 "$rc" "raw dump" "$out"
+
 # WSL slow-mount note: fires only under WSL AND when --add-dir is on /mnt/*
 out=$(WSL_DISTRO_NAME=Ubuntu "$DELEGATE" --dir /mnt/c/proj --print-command "hi" 2>&1); rc=$?
 check "WSL + /mnt --dir -> slow-mount note" 0 "$rc" "9p bridge" "$out"
@@ -309,7 +328,7 @@ else echo "FAIL: delegate agent missing PreToolUse gate"; FAIL=$((FAIL+1)); fi
 
 echo "== bin/ entrypoints (issue #11: \$CLAUDE_PLUGIN_ROOT not on model-run Bash) =="
 BIN="$ROOT/bin"
-for b in agy-delegate agy-job agy-cost-compare agy-doctor cloud-debug; do
+for b in agy-delegate agy-job agy-cost-compare agy-doctor cloud-debug agy-trace; do
   if [ -x "$BIN/$b" ]; then echo "ok: bin/$b executable"; PASS=$((PASS+1));
   else echo "FAIL: bin/$b missing or not executable"; FAIL=$((FAIL+1)); fi
 done
@@ -321,6 +340,29 @@ case "$out" in *doctor*) echo "ok: bin/agy-doctor forwards to doctor.sh"; PASS=$
   *) echo "FAIL: bin/agy-doctor did not forward (got: '$out')"; FAIL=$((FAIL+1));; esac
 out=$(env -u CLAUDE_PLUGIN_ROOT "$BIN/cloud-debug" --service svc --print-command 2>/dev/null); rc=$?
 check "bin/cloud-debug forwards to cloud-debug.sh (no CLAUDE_PLUGIN_ROOT)" 0 "$rc" "logging read" "$out"
+
+echo "== agy-trace.sh (subagent trajectory reader) =="
+TRACE="$ROOT/scripts/agy-trace.sh"
+# fixture: a brain dir with one subagent transcript (shape matches agy 1.0.12)
+FIXBRAIN="$TMP/brain"
+mkdir -p "$FIXBRAIN/conv-123/.system_generated/logs"
+cat > "$FIXBRAIN/conv-123/.system_generated/logs/transcript.jsonl" <<'JSONL'
+{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>do the thing</USER_REQUEST>"}
+{"step_index":1,"source":"SYSTEM","type":"PLANNER_RESPONSE","status":"DONE","content":"I did the thing and reported back."}
+JSONL
+out=$(AGY_BRAIN_DIR="$FIXBRAIN" "$TRACE" conv-123 2>&1); rc=$?
+check "trace by conversationId -> pretty steps" 0 "$rc" "USER_INPUT" "$out"
+check "trace shows planner step" 0 "$rc" "PLANNER_RESPONSE" "$out"
+out=$("$TRACE" "$FIXBRAIN/conv-123/.system_generated/logs/transcript.jsonl" 2>&1); rc=$?
+check "trace by literal path works" 0 "$rc" "USER_INPUT" "$out"
+out=$(AGY_BRAIN_DIR="$FIXBRAIN" "$TRACE" --raw conv-123 2>&1); rc=$?
+check "--raw emits raw JSONL" 0 "$rc" '"step_index":0' "$out"
+out=$(AGY_BRAIN_DIR="$FIXBRAIN" "$TRACE" --list 2>&1); rc=$?
+check "--list shows the transcript" 0 "$rc" "conv-123" "$out"
+out=$(AGY_BRAIN_DIR="$FIXBRAIN" "$TRACE" no-such-conv 2>&1); rc=$?
+check "unknown conversationId -> exit 2" 2 "$rc" "no transcript" "$out"
+out=$(env -u CLAUDE_PLUGIN_ROOT AGY_BRAIN_DIR="$FIXBRAIN" "$BIN/agy-trace" conv-123 2>&1); rc=$?
+check "bin/agy-trace forwards (no CLAUDE_PLUGIN_ROOT)" 0 "$rc" "USER_INPUT" "$out"
 
 echo "== measure-session.py =="
 SESS="$TMP/sess.jsonl"
@@ -430,7 +472,7 @@ for s in ("hooks/check-agy.sh", "hooks/inject-policy.sh", "hooks/validate-delega
 
 # bin/ entrypoints exist + executable (issue #11: $CLAUDE_PLUGIN_ROOT isn't exported
 # to model-run Bash, so commands/skill must call these bare names on the PATH)
-for b in ("agy-delegate", "agy-job", "agy-cost-compare", "agy-doctor", "cloud-debug"):
+for b in ("agy-delegate", "agy-job", "agy-cost-compare", "agy-doctor", "cloud-debug", "agy-trace"):
     need(os.access(p("bin", b), os.X_OK), "bin entrypoint missing/not executable: bin/" + b)
 
 # regression guard: commands & skill must NOT invoke $CLAUDE_PLUGIN_ROOT/scripts/* — that
