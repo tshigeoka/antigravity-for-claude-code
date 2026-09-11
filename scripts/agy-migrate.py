@@ -24,6 +24,7 @@ Design constraints, all of them learned the hard way from probing agy 1.1.12
 
 import argparse
 import json
+import ntpath
 import os
 import re
 import shutil
@@ -74,6 +75,43 @@ HOOK_EVENT_MAP = {
     "UserPromptSubmit": "PreInvocation",
     "Stop": "Stop",
 }
+
+
+def configure_stdio():
+    """Make the streams able to carry the report.
+
+    A redirected stdout on Windows defaults to the legacy ANSI codepage (cp1252),
+    which cannot encode the status glyphs — print_report() used to die on the first
+    one, mid-report, with a UnicodeEncodeError. Prefer UTF-8, but honour an explicit
+    PYTHONIOENCODING rather than overriding a deliberate choice; either way switch
+    the error handler so no character can ever abort a run.
+    """
+    pinned = bool(os.environ.get("PYTHONIOENCODING"))
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:      # not a TextIOWrapper (pytest capture, etc.)
+            continue
+        try:
+            if pinned:
+                reconfigure(errors="replace")
+            else:
+                reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError, LookupError):
+            pass
+
+
+def stream_can_encode(text, stream=None):
+    enc = getattr(stream if stream is not None else sys.stdout, "encoding", None)
+    if not enc:
+        return False
+    try:
+        text.encode(enc)
+    except (UnicodeError, LookupError):
+        return False
+    return True
+
+
+configure_stdio()
 
 C = {
     "ok": "\033[32m", "warn": "\033[33m", "skip": "\033[90m",
@@ -156,9 +194,16 @@ def now_iso():
 
 
 def encode_project_dir(path):
-    """Claude Code's projects/ dir name. Lossy: '/', '_' and '.' all become '-',
-    which is why this only ever runs FORWARD, never as a decode."""
-    return re.sub(r"[/_.]", "-", path)
+    """Claude Code's projects/ dir name. Lossy: '/', '_', '.' and the Windows
+    drive ':' all become '-', which is why this only ever runs FORWARD, never as
+    a decode.
+
+    The separator is normalised first because the two callers disagree about it:
+    ~/.claude.json records POSIX-style paths even on Windows, while
+    os.path.expanduser("~") hands back backslashes. Both have to encode the same
+    way or the home-dir project — Claude's de-facto global memory — never matches.
+    """
+    return re.sub(r"[/_.:]", "-", path.replace("\\", "/"))
 
 
 def default_roots():
@@ -474,7 +519,7 @@ def memory_sources():
 
     Resolution is forward-only: we re-encode each known project path from
     ~/.claude.json and compare. Decoding the directory name is impossible because
-    '/', '_' and '.' all collapse to '-'.
+    '/', '_', '.' and the Windows drive ':' all collapse to '-'.
     """
     base = os.path.join(claude_dir(), "projects")
     if not os.path.isdir(base):
@@ -1024,6 +1069,27 @@ def convert_matcher(matcher):
     return "|".join(mapped), note
 
 
+def native_import_env(stage):
+    """Environment that points the native importer at the staging tree.
+
+    HOME alone is not enough: `agy` is a Go binary, and os.UserHomeDir() reads
+    USERPROFILE on Windows (falling back to HOMEDRIVE+HOMEPATH), never HOME. With
+    only HOME set the importer scanned the REAL ~/.claude, whose nested
+    plugins/cache/<marketplace>/<plugin>/<version>/ layout it cannot see, and
+    reported "No claude extensions found" — the exact limitation staging exists to
+    work around. `stage` comes from tempfile.mkdtemp() and is already absolute;
+    ntpath rather than os.path so the drive split is the Windows one whichever
+    platform builds the env — which is what makes this testable on a POSIX CI.
+    """
+    env = dict(os.environ, HOME=stage)
+    if os.name == "nt":
+        drive, tail = ntpath.splitdrive(stage)
+        env["USERPROFILE"] = stage
+        env["HOMEDRIVE"], env["HOMEPATH"] = drive, tail
+    env.pop("CLAUDE_CONFIG_DIR", None)
+    return env
+
+
 def run_native_import(stage, plugins):
     """Flatten real plugins into a staging HOME and let agy convert them there.
     The importer needs no auth, so nothing touches the real config.
@@ -1039,8 +1105,7 @@ def run_native_import(stage, plugins):
         dst = os.path.join(pdir, name)
         if not os.path.exists(dst):
             shutil.copytree(src, dst, symlinks=False, ignore=ignore)
-    env = dict(os.environ, HOME=stage)
-    env.pop("CLAUDE_CONFIG_DIR", None)
+    env = native_import_env(stage)
     try:
         r = subprocess.run(["agy", "plugin", "import", "claude"],
                            cwd=stage, env=env, capture_output=True, text=True,
@@ -1172,17 +1237,17 @@ def unit_plugins(plan, mf):
         try:
             rc, out = run_native_import(stage, fresh)
             if rc != 0:
-                print(f"    · native importer failed (rc={rc}): "
+                print(f"    {SYM['skip']} native importer failed (rc={rc}): "
                       f"{out.strip().splitlines()[-1] if out.strip() else ''}")
                 return False
             for n in postprocess_staged(stage, fresh, plan):
-                print(f"    · {n}")
+                print(f"    {SYM['skip']} {n}")
             sroot = os.path.join(stage, ".gemini", "config", "plugins")
             staged = sorted(os.listdir(sroot)) if os.path.isdir(sroot) else []
             if not staged:
                 # rc==0 with no output is how the importer reports "found nothing".
                 # Reporting success here would be a lie.
-                print(f"    · native importer produced nothing: "
+                print(f"    {SYM['skip']} native importer produced nothing: "
                       f"{out.strip() or '(no output)'}")
                 return False
             copied = 0
@@ -1193,7 +1258,7 @@ def unit_plugins(plan, mf):
                 shutil.copytree(os.path.join(sroot, name), target)
                 mf.trees.append(target)     # we created it whole; undo removes it whole
                 copied += 1
-            print(f"    · placed {copied}/{len(fresh)} plugin(s)")
+            print(f"    {SYM['skip']} placed {copied}/{len(fresh)} plugin(s)")
             sman = read_json(os.path.join(stage, ".gemini", "config",
                                           "import_manifest.json"), None)
             if sman:
@@ -1298,7 +1363,13 @@ def do_uninstall(apply_):
 
 # --- report ------------------------------------------------------------------
 
-SYM = {"ok": "✓", "warn": "⚠", "skip": "·", "err": "✗"}
+SYM_UNICODE = {"ok": "✓", "warn": "⚠", "skip": "·", "err": "✗"}
+SYM_ASCII = {"ok": "+", "warn": "!", "skip": "-", "err": "x"}
+# configure_stdio() has already tried to get a UTF-8 stream; where it could not —
+# PYTHONIOENCODING=ascii, or a stream that refuses to be reconfigured — fall back
+# rather than emit a column of replacement characters.
+SYM = (SYM_UNICODE if stream_can_encode("".join(SYM_UNICODE.values()))
+       else SYM_ASCII)
 
 
 def print_report(plan, apply_):
@@ -1309,7 +1380,7 @@ def print_report(plan, apply_):
         print(f"\n{C['hdr']}[{unit}]{C['off']}")
         for i in items:
             col = C.get(i["level"], "")
-            print(f"  {col}{SYM.get(i['level'],'·')}{C['off']} "
+            print(f"  {col}{SYM.get(i['level'], SYM['skip'])}{C['off']} "
                   f"{i['action']:<20} {i['target']}")
             if i["detail"]:
                 print(f"      {i['detail']}")
@@ -1424,9 +1495,9 @@ def main(argv=None):
                 res = i["fn"]()
             except Exception as e:                       # keep going; report at the end
                 res, e_txt = False, f"{type(e).__name__}: {e}"
-                print(f"  {C['err']}✗{C['off']} {i['action']} {i['target']} — {e_txt}")
+                print(f"  {C['err']}{SYM['err']}{C['off']} {i['action']} {i['target']} — {e_txt}")
             else:
-                mark = C["err"] + "✗" if res is False else C["ok"] + "✓"
+                mark = (C["err"] + SYM["err"]) if res is False else (C["ok"] + SYM["ok"])
                 print(f"  {mark}{C['off']} {i['action']} {i['target']}")
             if res is False:
                 failed.append(f"{i['unit']}/{i['action']}")

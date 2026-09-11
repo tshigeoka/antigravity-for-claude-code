@@ -29,12 +29,19 @@ Things people expect and will not find: `~/.claude/CLAUDE.md`, `~/.claude/memory
 `~/.claude/agents/`, `~/.claude/commands/`, `~/.claude/hooks/`, `~/.claude/todos/`
 (now `tasks/`). Hooks exist only inside plugins.
 
-**The directory-name encoding is lossy.** `/`, `_` and `.` all become `-`:
+**The directory-name encoding is lossy.** `/`, `_`, `.` and — on Windows — the drive
+`:` all become `-`:
 
 ```
 /Users/x/Documents/GitHub                       -> -Users-x-Documents-GitHub
 /Users/x/repo/202602_nano_multi-turn_edit       -> -Users-x-repo-202602-nano-multi-turn-edit
+C:/Users/x/Projects/repo                        -> C--Users-x-Projects-repo
 ```
+
+`\` counts as a separator too, which matters more than it looks: `~/.claude.json`
+records POSIX-style paths even on Windows, while `os.path.expanduser("~")` hands back
+backslashes. Both spellings name the same project, so both have to encode identically
+or the home-dir project — Claude's de-facto global memory — resolves to nothing.
 
 So it can only be used forward. `agy-migrate` re-encodes every path in
 `~/.claude.json`'s `projects` and matches. Two cases resolve to nothing and are

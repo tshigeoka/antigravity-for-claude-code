@@ -35,7 +35,14 @@ printf -- '---\nname: demo-skill\ndescription: d\nversion: 1.0.0\nallowed-tools:
   > "$H/.claude/skills/demo-skill/SKILL.md"
 
 # Memory for the home-dir project == Claude's de-facto global memory.
-ENC="$(python3 -c "import re,os;print(re.sub(r'[/_.]','-',os.path.expanduser('~')))")"
+# The encoding is the script's own, not a copy of it: a change to the character
+# class has to move both the fixture and the tool, or the test proves nothing.
+enc() { python3 -c "import importlib.util,sys
+spec = importlib.util.spec_from_file_location('m', sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.encode_project_dir(sys.argv[2]))" "$MIG" "$1"; }
+
+ENC="$(enc "$H")"
 mkdir -p "$H/.claude/projects/$ENC/memory"
 printf -- '---\nname: g-rule\ndescription: global one\nmetadata:\n  type: feedback\n---\nSee [[other]] and [[missing]].\n' \
   > "$H/.claude/projects/$ENC/memory/g-rule.md"
@@ -44,7 +51,7 @@ printf -- '---\nname: other\ndescription: o\n---\nother body\n' \
 printf -- '- [G](g-rule.md)\n' > "$H/.claude/projects/$ENC/memory/MEMORY.md"
 
 # A memory file well over Antigravity's 12000-char per-rule cap.
-REPO_ENC="$(python3 -c "import re,sys;print(re.sub(r'[/_.]','-',sys.argv[1]))" "$REPO")"
+REPO_ENC="$(enc "$REPO")"
 mkdir -p "$H/.claude/projects/$REPO_ENC/memory"
 # 2400 paragraphs -> >10 chunks, so the "(part 10/NN)" suffix is wider than a
 # single-digit estimate would reserve.
@@ -439,6 +446,60 @@ assert m.translate_permission("Bash($ROOT *)") is None
 PY
 then ok "hook/MCP/permission translation matches Antigravity's schema"
 else bad "translation unit checks failed"; fi
+
+# --- Windows portability -----------------------------------------------------
+# CI is Ubuntu + macOS, so the Windows behaviour is asserted through the pure
+# functions rather than by running on Windows.
+if python3 - "$MIG" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("m", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+# Claude Code collapses the drive colon like any other separator; leaving it in
+# meant no Windows project ever resolved, and --include-orphan-memory would then
+# fold every repo's notes into always-on global rules.
+assert m.encode_project_dir("C:/Users/USER/Projects/REPO") == "C--Users-USER-Projects-REPO"
+assert m.encode_project_dir("c:/Users/USER/.claude") == "c--Users-USER--claude"
+# ~/.claude.json records forward slashes; os.path.expanduser("~") returns
+# backslashes. Both name the same project, so both must encode the same way.
+assert m.encode_project_dir("C:\\Users\\USER") == m.encode_project_dir("C:/Users/USER")
+# POSIX paths are unchanged by the widened class.
+assert (m.encode_project_dir("/Users/x/repo/202602_nano_multi-turn_edit")
+        == "-Users-x-repo-202602-nano-multi-turn-edit")
+PY
+then ok "encode_project_dir matches Claude's encoding of a Windows path"
+else bad "encode_project_dir does not collapse the drive colon"; fi
+
+if python3 - "$MIG" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("m", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+env = m.native_import_env("/tmp/stage")
+assert env["HOME"] == "/tmp/stage", env
+assert "CLAUDE_CONFIG_DIR" not in env, env      # a relocated profile must not leak
+
+# agy is a Go binary: os.UserHomeDir() reads USERPROFILE on Windows, never HOME,
+# so HOME alone left the importer scanning the real ~/.claude and reporting
+# "No claude extensions found". Force the branch; CI never runs on Windows.
+real, m.os.name = m.os.name, "nt"
+try:
+    env = m.native_import_env("C:\\stage")
+finally:
+    m.os.name = real
+assert env["HOME"] == "C:\\stage", env
+assert env["USERPROFILE"] == "C:\\stage", env
+assert env["HOMEDRIVE"] == "C:" and env["HOMEPATH"] == "\\stage", env
+PY
+then ok "native_import_env points every home variable at the staging tree"
+else bad "staging HOME does not carry the Windows home variables"; fi
+
+# The status glyphs used to be printed unconditionally, so a stream that cannot
+# encode them (a redirected stdout on a cp1252 console) killed the report.
+OUT_ASCII="$(PYTHONIOENCODING=ascii NO_COLOR=1 python3 "$MIG" --roots "$H" 2>&1)"; RC=$?
+if [ "$RC" -eq 0 ] && has "Total" "$OUT_ASCII" && ! has "UnicodeEncodeError" "$OUT_ASCII"; then
+  ok "dry run completes on an ASCII-only stdout"
+else bad "ASCII stdout aborted the report (rc=$RC)"; fi
 
 echo
 echo "passed: $PASS   failed: $FAIL"
